@@ -1,6 +1,37 @@
 # PrivateCallingApp: Serverless P2P VoIP & Video for Android
 
+<div align="center">
+
+[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Kotlin](https://img.shields.io/badge/kotlin-1.9.24-blue.svg)](https://kotlinlang.org/)
+[![Android API](https://img.shields.io/badge/API-24%2B-brightgreen.svg)](https://android-arsenal.com/api?level=24)
+[![Compose](https://img.shields.io/badge/Jetpack-Compose-4285F4.svg)](https://developer.android.com/jetpack/compose)
+[![WebRTC](https://img.shields.io/badge/WebRTC-P2P-orange.svg)](https://webrtc.org/)
+
+🔐 **End-to-end encrypted, serverless, peer-to-peer calling for Android**
+
+> No central server. No intermediary. No data collection. Just direct, encrypted calls over your Tailscale mesh network.
+
+**[Quick Start](#-quick-start--building) | [Architecture](ARCHITECTURE.md) | [Contributing](CONTRIBUTING.md) | [Key Features](#-key-features) | [FAQ](#-faq)**
+
+</div>
+
+---
+
 A secure, serverless peer-to-peer (P2P) camera and voice-over-IP (VoIP) application built for Android. The application enables direct, encrypted device-to-device communication over a Tailscale overlay network (or local IPv6 network) without depending on centralized signaling or coordination servers.
+
+---
+
+## ✨ Key Features
+
+- 🔒 **End-to-End Encrypted**: DTLS-SRTP media channel + secp256r1 asymmetric keys.
+- 🌐 **Serverless P2P**: No central server required; each device runs an embedded Ktor WebSocket signaling server.
+- 🆔 **Identity Verification**: Short Authentication Strings (SAS) computed as `SHA-256` of concatenated public keys for out-of-band verification.
+- 🔐 **Hardware Security**: Asymmetric identity keys generated and stored inside the Android Keystore.
+- 📱 **Full HD Video**: Side-by-side local and remote video rendering with hardware acceleration.
+- 🔊 **Crystal Audio**: Acoustic Echo Cancellation (AEC), Automatic Gain Control (AGC), and Noise Suppression (NS) dynamically adjusted based on hardware.
+- 🚀 **Performance Optimized**: Low-latency event streaming via `MutableSharedFlow` (with `DROP_OLDEST` overflow strategy) and leak-proof coroutine lifecycle management.
+- 🛡️ **Privacy First**: No telemetry, no cloud storage, local-only processing.
 
 ---
 
@@ -63,16 +94,18 @@ The application is designed using a decoupled, multi-module architecture to enfo
 
 ## 🛠️ Toolchain & Tech Stack
 
-The project runs on a highly stable build environment designed to bypass compiler metadata conflicts with Hilt/Room KAPT:
+Built with stable, industry-standard Android tools:
 
-*   **Gradle**: `8.10`
-*   **Android Gradle Plugin (AGP)**: `8.7.3`
-*   **Kotlin Compiler**: `1.9.24`
-*   **Jetpack Compose Compiler**: `1.5.14` (Compose BOM `2024.02.02`)
-*   **Hilt / Room**: Hilt `2.51.1` | Room `2.6.1`
-*   **Ktor Engine**: Ktor `2.3.12` (Netty engine for server, OkHttp engine for client)
-*   **WebRTC SDK**: `io.getstream:stream-webrtc-android:1.1.2`
-*   **Timber**: `5.0.1` (Structured logging)
+| Component | Technology | Version |
+|-----------|------------|---------|
+| **Language** | Kotlin | `1.9.24` |
+| **Android Build** | AGP & Gradle | AGP `8.7.3` / Gradle `8.10` |
+| **UI Framework** | Jetpack Compose | `1.5.14` (Compose BOM `2024.02.02`) |
+| **Media** | WebRTC (Stream) | `1.1.2` |
+| **Networking** | Ktor Server & Client | `2.3.12` |
+| **Database** | Room | `2.6.1` |
+| **DI** | Hilt | `2.51.1` |
+| **Logging** | Timber | `5.0.1` |
 
 ---
 
@@ -111,19 +144,37 @@ To ensure your device is always available to receive incoming calls, configure t
 
 ---
 
-## 🚀 Building & Verification
+## 🚀 Quick Start & Building
 
 ### Prerequisites
-*   Android SDK (API Level 26+)
-*   Tailscale Android app installed, authenticated, and running on the target device.
+- Android SDK (API Level 24+)
+- Tailscale Android client installed, authenticated, and running on both target devices.
 
-### Compile and Build APK
-To compile the project and generate a debug APK, run:
-```powershell
-.\gradlew.bat assembleDebug
-```
-The output APK is generated at:
-`[project-root]/app/build/outputs/apk/debug/app-debug.apk`
+### Setup & Installation (60 seconds)
+
+1. **Clone the Repository**
+   ```bash
+   git clone https://github.com/imviren/PrivateCallingApp.git
+   cd PrivateCallingApp
+   ```
+
+2. **Compile and Build APK**
+   To compile the project and generate a debug APK, run:
+   ```powershell
+   # On Windows
+   .\gradlew.bat assembleDebug
+   
+   # On Linux/macOS
+   ./gradlew assembleDebug
+   ```
+   The output APK is generated at:
+   `app/build/outputs/apk/debug/app-debug.apk`
+
+3. **Install APK**
+   Install the build onto your devices:
+   ```bash
+   adb install app/build/outputs/apk/debug/app-debug.apk
+   ```
 
 ---
 
@@ -138,3 +189,42 @@ The output APK is generated at:
     *   Gather ICE candidates (using direct/TURN fallback pathways).
     *   Initialize WebRTC media loops (AEC/AGC/NS) and render video feeds side-by-side.
 5.  **Verify Integrity**: Compare the 5-digit SAS security code visible on both screens to verify the connection's integrity.
+
+---
+
+## ❓ FAQ
+
+**Q: Why Tailscale instead of a traditional STUN/TURN/Signaling server?**  
+A: Traditional WebRTC apps require STUN, TURN, and Signaling servers, representing infrastructure costs and privacy bottlenecks. Tailscale builds a secure WireGuard mesh overlay network, allowing direct IP-to-IP signaling and media streams without complex firewall traversal or intermediate servers.
+
+**Q: Can I use this without Tailscale?**  
+A: Yes, as long as both devices can reach each other directly over IP (e.g., local Wi-Fi, private IPv6, or alternative VPN tunnels). You simply enter the direct IP address of the peer.
+
+**Q: Is there an iOS version?**  
+A: Not currently. This app is natively optimized for Android, Compose, and Android Keystore.
+
+**Q: Can I use this for group calling?**  
+A: The current release is strictly optimized for private 1:1 calling.
+
+---
+
+## 👥 Contributing
+We welcome contributions! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on code style, testing requirements, commit message formats, and branching strategies.
+
+---
+
+## 📞 Support & Contact
+If you encounter any bugs or have feature suggestions, please open a ticket in our [GitHub Issues](https://github.com/imviren/PrivateCallingApp/issues) tracker.
+
+---
+
+## 🙏 Acknowledgments
+- **Tailscale**: Secure mesh networking VPN.
+- **WebRTC**: Real-time media communication framework.
+- **Google**: Android Jetpack, Hilt, Room, and Compose libraries.
+- **JetBrains**: Kotlin language and Netty engine.
+
+---
+
+## 📜 License
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
