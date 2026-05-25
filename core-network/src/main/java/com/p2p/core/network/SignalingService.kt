@@ -9,6 +9,12 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 import javax.inject.Inject
 import timber.log.Timber
 
@@ -29,6 +35,11 @@ class SignalingService : Service() {
     @Inject
     lateinit var tailscaleDetector: TailscaleDetector
 
+    @Inject
+    lateinit var tailscaleScanner: TailscaleScanner
+
+    private var publishJob: Job? = null
+
     override fun onCreate() {
         super.onCreate()
         Timber.tag(TAG).i("SignalingService onCreate")
@@ -38,6 +49,15 @@ class SignalingService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Timber.tag(TAG).i("SignalingService onStartCommand")
         signalingServer.start()
+
+        if (publishJob == null) {
+            publishJob = CoroutineScope(Dispatchers.IO).launch {
+                while (isActive) {
+                    tailscaleScanner.publishPresence()
+                    delay(15000L)
+                }
+            }
+        }
 
         intent?.action?.let { action ->
             Timber.tag(TAG).i("onStartCommand action: $action")
@@ -55,6 +75,8 @@ class SignalingService : Service() {
         super.onDestroy()
         Timber.tag(TAG).i("SignalingService onDestroy")
         signalingServer.stop()
+        publishJob?.cancel()
+        publishJob = null
     }
 
     override fun onBind(intent: Intent?): IBinder? {

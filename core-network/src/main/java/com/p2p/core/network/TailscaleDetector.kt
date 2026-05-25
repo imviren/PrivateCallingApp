@@ -9,7 +9,8 @@ import timber.log.Timber
 
 data class TailscaleAddresses(
     val ipv4: String? = null,
-    val ipv6: String? = null
+    val ipv6: String? = null,
+    val localIpv4s: List<String> = emptyList()
 ) {
     fun summary(): String {
         return buildString {
@@ -28,6 +29,7 @@ class TailscaleDetector @Inject constructor() {
     fun getAddresses(): TailscaleAddresses {
         var ipv4: String? = null
         var ipv6: String? = null
+        val localIpv4s = mutableListOf<String>()
 
         try {
             val interfaces = NetworkInterface.getNetworkInterfaces() ?: return TailscaleAddresses()
@@ -44,6 +46,8 @@ class TailscaleDetector @Inject constructor() {
                         // Tailscale IPv4 addresses are in CGNAT 100.64.0.0/10 range (100.64.x.x - 100.127.x.x)
                         if (isTailscaleIpv4(ip)) {
                             ipv4 = ip
+                        } else if (!addr.isLinkLocalAddress) {
+                            localIpv4s.add(ip)
                         }
                     } else if (addr is Inet6Address) {
                         // Tailscale IPv6 addresses are in fd7a:115c:a1e0::/48 range
@@ -58,7 +62,7 @@ class TailscaleDetector @Inject constructor() {
             Timber.tag("TailscaleDetector").e(e, "Error detecting Tailscale addresses")
         }
 
-        return TailscaleAddresses(ipv4, ipv6)
+        return TailscaleAddresses(ipv4, ipv6, localIpv4s)
     }
 
     private fun isTailscaleIpv4(ip: String): Boolean {
