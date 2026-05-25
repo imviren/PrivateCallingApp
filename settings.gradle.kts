@@ -29,7 +29,7 @@ plugins {
     id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
 }
 
-rootProject.name = "Communication"
+rootProject.name = "PrivateCallingApp"
 include(":app")
 include(":core-network")
 include(":core-media")
