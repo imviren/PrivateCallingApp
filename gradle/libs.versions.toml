@@ -1,5 +1,5 @@
 [versions]
-androidGradlePlugin = "8.7.3"
+androidGradlePlugin = "8.13.2"
 androidxCore = "1.12.0"
 androidxLifecycle = "2.7.0"
 androidxActivity = "1.8.2"
@@ -14,6 +14,8 @@ kotlin = "1.9.24"
 hilt = "2.51.1"
 room = "2.6.1"
 ktor = "2.3.12"
+appcompat = "1.7.0"
+material = "1.12.0"
 
 
 [libraries]
@@ -63,6 +65,8 @@ room-ktx = { module = "androidx.room:room-ktx", version.ref = "room" }
 
 # Coroutines
 coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
+androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
+material = { group = "com.google.android.material", name = "material", version.ref = "material" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "androidGradlePlugin" }

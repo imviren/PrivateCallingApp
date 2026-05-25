@@ -60,8 +60,10 @@ dependencies {
   implementation(project(":core-storage"))
   implementation(project(":feature-call"))
   implementation(project(":feature-contacts"))
+    implementation(libs.androidx.appcompat)
+    implementation(libs.material)
 
-  val composeBom = platform(libs.androidx.compose.bom)
+    val composeBom = platform(libs.androidx.compose.bom)
   implementation(composeBom)
   androidTestImplementation(composeBom)
 

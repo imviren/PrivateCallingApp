@@ -37,4 +37,3 @@ include(":core-crypto")
 include(":core-storage")
 include(":feature-call")
 include(":feature-contacts")
-
