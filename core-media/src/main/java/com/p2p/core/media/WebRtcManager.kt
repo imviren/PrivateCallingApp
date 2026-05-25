@@ -78,11 +78,11 @@ class WebRtcManager @Inject constructor(
         Timber.tag(TAG).i("Initializing local media tracks...")
         // Audio Track
         val audioConstraints = MediaConstraints()
-        val isLowEndDevice = Runtime.getRuntime().maxMemory() < 512 * 1024 * 1024 // Heap < 512MB
+        val isLowEnd = isLowEndDevice()
         
         audioConstraints.mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation", "true"))
         audioConstraints.mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression", "true"))
-        if (!isLowEndDevice) {
+        if (!isLowEnd) {
             audioConstraints.mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl", "true"))
         } else {
             Timber.tag(TAG).i("Low-end device detected: disabling Auto Gain Control to conserve CPU")
@@ -173,15 +173,7 @@ class WebRtcManager @Inject constructor(
                 Timber.tag(TAG).i("Track added: %s", track?.kind())
                 if (track != null) {
                     if (track is VideoTrack) {
-                        val oldTrack = remoteVideoTrack
-                        if (oldTrack != null && oldTrack != track) {
-                            try {
-                                oldTrack.dispose()
-                            } catch (e: Exception) {
-                                Timber.tag(TAG).e(e, "Error disposing old remote video track")
-                            }
-                        }
-                        remoteVideoTrack = track
+                        replaceRemoteVideoTrack(track)
                     }
                     _events.tryEmit(WebRtcEvent.RemoteTrackAdded(track))
                 }
@@ -325,5 +317,33 @@ class WebRtcManager @Inject constructor(
         localVideoTrack = null
         localAudioTrack = null
         remoteVideoTrack = null
+    }
+
+    private fun replaceRemoteVideoTrack(newTrack: VideoTrack) {
+        val oldTrack = remoteVideoTrack
+        if (oldTrack != null && oldTrack != newTrack) {
+            try {
+                oldTrack.dispose()
+                Timber.tag(TAG).i("Old remote video track disposed")
+            } catch (e: Exception) {
+                Timber.tag(TAG).e(e, "Failed to dispose old track, may leak GPU resources")
+            }
+        }
+        remoteVideoTrack = newTrack
+    }
+
+    private fun isLowEndDevice(): Boolean {
+        val runtime = Runtime.getRuntime()
+        val availableHeap = runtime.maxMemory() / (1024 * 1024)
+        
+        val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+        val memInfo = android.app.ActivityManager.MemoryInfo()
+        activityManager.getMemoryInfo(memInfo)
+        val totalRamGB = memInfo.totalMem / (1024 * 1024 * 1024)
+        
+        val cpuCores = Runtime.getRuntime().availableProcessors()
+        
+        Timber.tag(TAG).i("Device Profiling - Available Heap: %dMB, Total RAM: %dGB, CPU Cores: %d", availableHeap, totalRamGB, cpuCores)
+        return availableHeap < 256 || totalRamGB < 2 || cpuCores < 4
     }
 }

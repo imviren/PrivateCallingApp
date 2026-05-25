@@ -37,8 +37,8 @@ class SignalingClient @Inject constructor() {
 
     private var session: DefaultWebSocketSession? = null
     private var connectionJob: Job? = null
-    private var scopeJob = SupervisorJob()
-    private var scope = CoroutineScope(Dispatchers.IO + scopeJob)
+    private val scopeJob = SupervisorJob()
+    private val scope = CoroutineScope(Dispatchers.IO + scopeJob)
 
     private val _events = MutableSharedFlow<SignalingEvent>(
         replay = 0,
@@ -52,13 +52,21 @@ class SignalingClient @Inject constructor() {
         encodeDefaults = true
     }
 
+    @Synchronized
     fun connect(wsUrl: String) {
-        if (connectionJob != null) {
-            Timber.tag(TAG).d("Already connecting or connected to $wsUrl")
+        if (!wsUrl.startsWith("ws://") && !wsUrl.startsWith("wss://")) {
+            Timber.tag(TAG).e("Invalid WebSocket URL: %s", wsUrl)
+            _events.tryEmit(SignalingEvent.Disconnected)
             return
         }
 
-        Timber.tag(TAG).i("Connecting to signaling server at $wsUrl...")
+        val currentJob = connectionJob
+        if (currentJob != null && !currentJob.isCompleted) {
+            Timber.tag(TAG).d("Already connecting or connected to %s", wsUrl)
+            return
+        }
+
+        Timber.tag(TAG).i("Connecting to signaling server at %s...", wsUrl)
         connectionJob = scope.launch {
             var attempt = 0
             val maxRetries = 3
@@ -93,13 +101,20 @@ class SignalingClient @Inject constructor() {
                             }
                         }
                     } catch (e: Exception) {
-                        if (e is kotlinx.coroutines.CancellationException) throw e
-                        attempt++
-                        Timber.tag(TAG).w(e, "Signaling connection attempt $attempt failed")
-                        if (attempt < maxRetries) {
-                            val backoffMs = 1000L * (1 shl (attempt - 1))
-                            Timber.tag(TAG).i("Retrying in ${backoffMs}ms...")
-                            delay(backoffMs)
+                        when (e) {
+                            is kotlinx.coroutines.CancellationException -> {
+                                Timber.tag(TAG).i("Connection cancelled by caller")
+                                throw e
+                            }
+                            else -> {
+                                attempt++
+                                Timber.tag(TAG).w(e, "Signaling connection attempt %d/%d failed", attempt, maxRetries)
+                                if (attempt < maxRetries) {
+                                    val backoffMs = (1000L shl (attempt - 1)).coerceAtMost(30000L)
+                                    Timber.tag(TAG).i("Retrying in %dms...", backoffMs)
+                                    delay(backoffMs)
+                                }
+                            }
                         }
                     }
                 }
@@ -107,7 +122,11 @@ class SignalingClient @Inject constructor() {
                 Timber.tag(TAG).i("Connection closed")
                 session = null
                 connectionJob = null
-                _events.emit(SignalingEvent.Disconnected)
+                try {
+                    _events.tryEmit(SignalingEvent.Disconnected)
+                } catch (e: Exception) {
+                    Timber.tag(TAG).e(e, "Error emitting Disconnected event")
+                }
             }
         }
     }
@@ -139,12 +158,13 @@ class SignalingClient @Inject constructor() {
         }
     }
     fun shutdown() {
-        Timber.tag(TAG).i("Shutting down SignalingClient scope...")
-        connectionJob?.cancel()
-        connectionJob = null
-        session = null
-        scopeJob.cancel()
-        scopeJob = SupervisorJob()
-        scope = CoroutineScope(Dispatchers.IO + scopeJob)
+        Timber.tag(TAG).i("Shutting down SignalingClient connections...")
+        try {
+            connectionJob?.cancel()
+            connectionJob = null
+            session = null
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "Error during shutdown")
+        }
     }
 }
