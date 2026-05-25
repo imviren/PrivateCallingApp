@@ -2,12 +2,9 @@ package com.p2p.core.media
 
 import android.content.Context
 import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.launch
 import org.webrtc.*
 import timber.log.Timber
 import javax.inject.Inject
@@ -38,26 +35,35 @@ class WebRtcManager @Inject constructor(
     private var localVideoSource: VideoSource? = null
     private var localAudioSource: AudioSource? = null
     private var surfaceTextureHelper: SurfaceTextureHelper? = null
-
-    private val scope = CoroutineScope(Dispatchers.Default)
+    private var cachedFrontCameraName: String? = null
 
     fun initFactory() {
         if (peerConnectionFactory != null) return
 
-        Timber.tag(TAG).i("Initializing PeerConnectionFactory...")
-        val initOptions = PeerConnectionFactory.InitializationOptions.builder(context)
-            .createInitializationOptions()
-        PeerConnectionFactory.initialize(initOptions)
+        try {
+            Timber.tag(TAG).i("Initializing PeerConnectionFactory...")
+            val initOptions = PeerConnectionFactory.InitializationOptions.builder(context)
+                .createInitializationOptions()
+            PeerConnectionFactory.initialize(initOptions)
 
-        val options = PeerConnectionFactory.Options()
-        val encoderFactory = DefaultVideoEncoderFactory(eglBase.eglBaseContext, true, true)
-        val decoderFactory = DefaultVideoDecoderFactory(eglBase.eglBaseContext)
+            val options = PeerConnectionFactory.Options()
+            val encoderFactory = DefaultVideoEncoderFactory(eglBase.eglBaseContext, true, true)
+            val decoderFactory = DefaultVideoDecoderFactory(eglBase.eglBaseContext)
 
-        peerConnectionFactory = PeerConnectionFactory.builder()
-            .setOptions(options)
-            .setVideoEncoderFactory(encoderFactory)
-            .setVideoDecoderFactory(decoderFactory)
-            .createPeerConnectionFactory()
+            peerConnectionFactory = PeerConnectionFactory.builder()
+                .setOptions(options)
+                .setVideoEncoderFactory(encoderFactory)
+                .setVideoDecoderFactory(decoderFactory)
+                .createPeerConnectionFactory()
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "Failed to initialize PeerConnectionFactory, cleaning up EGL Context")
+            try {
+                eglBase.release()
+            } catch (ex: Exception) {
+                Timber.tag(TAG).e(ex, "Failed to release EGL base")
+            }
+            throw e
+        }
     }
 
     fun initLocalMedia() {
@@ -77,19 +83,19 @@ class WebRtcManager @Inject constructor(
 
         // Video Track
         val enumerator = Camera2Enumerator(context)
-        val deviceNames = enumerator.deviceNames
-        var selectedDevice: String? = null
-
-        // Try to find front camera
-        for (deviceName in deviceNames) {
-            if (enumerator.isFrontFacing(deviceName)) {
-                selectedDevice = deviceName
-                break
+        var selectedDevice = cachedFrontCameraName
+        if (selectedDevice == null) {
+            val deviceNames = enumerator.deviceNames
+            for (deviceName in deviceNames) {
+                if (enumerator.isFrontFacing(deviceName)) {
+                    selectedDevice = deviceName
+                    break
+                }
             }
-        }
-        // Fallback to any camera
-        if (selectedDevice == null && deviceNames.isNotEmpty()) {
-            selectedDevice = deviceNames[0]
+            if (selectedDevice == null && deviceNames.isNotEmpty()) {
+                selectedDevice = deviceNames[0]
+            }
+            cachedFrontCameraName = selectedDevice
         }
 
         if (selectedDevice != null) {
@@ -97,8 +103,8 @@ class WebRtcManager @Inject constructor(
             surfaceTextureHelper = SurfaceTextureHelper.create("CaptureThread", eglBase.eglBaseContext)
             localVideoSource = factory.createVideoSource(videoCapturer!!.isScreencast)
             videoCapturer!!.initialize(surfaceTextureHelper, context, localVideoSource!!.capturerObserver)
-            // Resolution: 640x480 at 30 fps
-            videoCapturer!!.startCapture(640, 480, 30)
+            // Resolution: 640x480 at 24 fps (reduces CPU & battery drain)
+            videoCapturer!!.startCapture(640, 480, 24)
 
             localVideoTrack = factory.createVideoTrack("ARDAMSv0", localVideoSource)
             localVideoTrack?.setEnabled(true)
@@ -128,9 +134,7 @@ class WebRtcManager @Inject constructor(
 
             override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
                 Timber.tag(TAG).i("ICE connection state changed to: $state")
-                scope.launch {
-                    _events.emit(WebRtcEvent.IceConnectionStateChanged(state))
-                }
+                _events.tryEmit(WebRtcEvent.IceConnectionStateChanged(state))
             }
 
             override fun onIceConnectionReceivingChange(receiving: Boolean) {}
@@ -141,9 +145,7 @@ class WebRtcManager @Inject constructor(
 
             override fun onIceCandidate(candidate: IceCandidate) {
                 Timber.tag(TAG).d("New local ICE candidate: $candidate")
-                scope.launch {
-                    _events.emit(WebRtcEvent.LocalIceCandidate(candidate))
-                }
+                _events.tryEmit(WebRtcEvent.LocalIceCandidate(candidate))
             }
 
             override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>?) {}
@@ -163,9 +165,7 @@ class WebRtcManager @Inject constructor(
                     if (track is VideoTrack) {
                         remoteVideoTrack = track
                     }
-                    scope.launch {
-                        _events.emit(WebRtcEvent.RemoteTrackAdded(track))
-                    }
+                    _events.tryEmit(WebRtcEvent.RemoteTrackAdded(track))
                 }
             }
         }

@@ -13,12 +13,9 @@ import io.ktor.websocket.DefaultWebSocketSession
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
 import io.ktor.websocket.send
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import timber.log.Timber
@@ -38,7 +35,6 @@ class SignalingServer @Inject constructor() {
     val events: SharedFlow<SignalingEvent> = _events.asSharedFlow()
 
     private var activeSession: DefaultWebSocketSession? = null
-    private val scope = CoroutineScope(Dispatchers.IO)
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -66,7 +62,7 @@ class SignalingServer @Inject constructor() {
                         for (frame in incoming) {
                             if (frame is Frame.Text) {
                                 val text = frame.readText()
-                                Timber.tag(TAG).d("Received raw message: $text")
+                                Timber.tag(TAG).v("Received raw message: %s", text)
                                 try {
                                     val message = json.decodeFromString<SignalingMessage>(text)
                                     val event = when (message) {
@@ -105,7 +101,7 @@ class SignalingServer @Inject constructor() {
         if (session != null) {
             try {
                 val text = json.encodeToString(message)
-                Timber.tag(TAG).d("Sending message: $text")
+                Timber.tag(TAG).v("Sending message: %s", text)
                 session.send(text)
             } catch (e: Exception) {
                 Timber.tag(TAG).e(e, "Error sending signaling message")

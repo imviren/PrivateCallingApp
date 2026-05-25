@@ -11,6 +11,7 @@ import io.ktor.websocket.send
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -34,7 +35,7 @@ class SignalingClient @Inject constructor() {
 
     private var session: DefaultWebSocketSession? = null
     private var connectionJob: Job? = null
-    private val scope = CoroutineScope(Dispatchers.IO)
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private val _events = MutableSharedFlow<SignalingEvent>(extraBufferCapacity = 64)
     val events: SharedFlow<SignalingEvent> = _events.asSharedFlow()
@@ -53,7 +54,9 @@ class SignalingClient @Inject constructor() {
         Timber.tag(TAG).i("Connecting to signaling server at $wsUrl...")
         connectionJob = scope.launch {
             try {
-                session = client.webSocketSession(wsUrl)
+                session = kotlinx.coroutines.withTimeout(10000L) {
+                    client.webSocketSession(wsUrl)
+                }
                 Timber.tag(TAG).i("Connected successfully to $wsUrl")
                 _events.emit(SignalingEvent.Connected)
 
@@ -61,7 +64,7 @@ class SignalingClient @Inject constructor() {
                 for (frame in currentSession.incoming) {
                     if (frame is Frame.Text) {
                         val text = frame.readText()
-                        Timber.tag(TAG).d("Received raw message: $text")
+                        Timber.tag(TAG).v("Received raw message: %s", text)
                         try {
                             val message = json.decodeFromString<SignalingMessage>(text)
                             val event = when (message) {
@@ -104,7 +107,7 @@ class SignalingClient @Inject constructor() {
         if (currentSession != null) {
             try {
                 val text = json.encodeToString(message)
-                Timber.tag(TAG).d("Sending message: $text")
+                Timber.tag(TAG).v("Sending message: %s", text)
                 currentSession.send(text)
             } catch (e: Exception) {
                 Timber.tag(TAG).e(e, "Error sending signaling message")
