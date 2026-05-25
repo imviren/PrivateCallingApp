@@ -2,6 +2,7 @@ package com.p2p.core.media
 
 import android.content.Context
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -18,7 +19,11 @@ class WebRtcManager @Inject constructor(
         private const val TAG = "WebRtcManager"
     }
 
-    private val _events = MutableSharedFlow<WebRtcEvent>(extraBufferCapacity = 64)
+    private val _events = MutableSharedFlow<WebRtcEvent>(
+        replay = 0,
+        extraBufferCapacity = 128,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
     val events: SharedFlow<WebRtcEvent> = _events.asSharedFlow()
 
     private val eglBase: EglBase = EglBase.create()
@@ -73,10 +78,15 @@ class WebRtcManager @Inject constructor(
         Timber.tag(TAG).i("Initializing local media tracks...")
         // Audio Track
         val audioConstraints = MediaConstraints()
-        // Enable echo cancellation, noise suppression, auto gain control
+        val isLowEndDevice = Runtime.getRuntime().maxMemory() < 512 * 1024 * 1024 // Heap < 512MB
+        
         audioConstraints.mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation", "true"))
         audioConstraints.mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression", "true"))
-        audioConstraints.mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl", "true"))
+        if (!isLowEndDevice) {
+            audioConstraints.mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl", "true"))
+        } else {
+            Timber.tag(TAG).i("Low-end device detected: disabling Auto Gain Control to conserve CPU")
+        }
         
         localAudioSource = factory.createAudioSource(audioConstraints)
         localAudioTrack = factory.createAudioTrack("ARDAMSa0", localAudioSource)
@@ -144,7 +154,7 @@ class WebRtcManager @Inject constructor(
             }
 
             override fun onIceCandidate(candidate: IceCandidate) {
-                Timber.tag(TAG).d("New local ICE candidate: $candidate")
+                Timber.tag(TAG).d("New local ICE candidate: %s", candidate)
                 _events.tryEmit(WebRtcEvent.LocalIceCandidate(candidate))
             }
 
@@ -160,9 +170,17 @@ class WebRtcManager @Inject constructor(
 
             override fun onAddTrack(receiver: RtpReceiver, mediaStreams: Array<out MediaStream>) {
                 val track = receiver.track()
-                Timber.tag(TAG).i("Track added: ${track?.kind()}")
+                Timber.tag(TAG).i("Track added: %s", track?.kind())
                 if (track != null) {
                     if (track is VideoTrack) {
+                        val oldTrack = remoteVideoTrack
+                        if (oldTrack != null && oldTrack != track) {
+                            try {
+                                oldTrack.dispose()
+                            } catch (e: Exception) {
+                                Timber.tag(TAG).e(e, "Error disposing old remote video track")
+                            }
+                        }
                         remoteVideoTrack = track
                     }
                     _events.tryEmit(WebRtcEvent.RemoteTrackAdded(track))

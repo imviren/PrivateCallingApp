@@ -82,7 +82,7 @@ class CallViewModel @Inject constructor(
         // Observe SignalingServer (callee-role events)
         viewModelScope.launch {
             signalingServer.events.collect { event ->
-                Timber.tag(TAG).d("Server event: $event")
+                Timber.tag(TAG).d("Server event: %s", event)
                 handleSignalingEvent(event, fromServer = true)
             }
         }
@@ -90,7 +90,7 @@ class CallViewModel @Inject constructor(
         // Observe SignalingClient (caller-role events)
         viewModelScope.launch {
             signalingClient.events.collect { event ->
-                Timber.tag(TAG).d("Client event: $event")
+                Timber.tag(TAG).d("Client event: %s", event)
                 handleSignalingEvent(event, fromServer = false)
             }
         }
@@ -337,5 +337,6 @@ class CallViewModel @Inject constructor(
     override fun onCleared() {
         super.onCleared()
         webRtcManager.dispose()
+        signalingClient.shutdown()
     }
 }

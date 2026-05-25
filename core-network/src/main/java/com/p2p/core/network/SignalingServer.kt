@@ -13,6 +13,7 @@ import io.ktor.websocket.DefaultWebSocketSession
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
 import io.ktor.websocket.send
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -31,7 +32,11 @@ class SignalingServer @Inject constructor() {
     }
 
     private var serverEngine: NettyApplicationEngine? = null
-    private val _events = MutableSharedFlow<SignalingEvent>(extraBufferCapacity = 64)
+    private val _events = MutableSharedFlow<SignalingEvent>(
+        replay = 0,
+        extraBufferCapacity = 128,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
     val events: SharedFlow<SignalingEvent> = _events.asSharedFlow()
 
     private var activeSession: DefaultWebSocketSession? = null
