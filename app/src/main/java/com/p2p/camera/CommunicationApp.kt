@@ -15,8 +15,10 @@ class CommunicationApp : Application() {
     override fun onCreate() {
         super.onCreate()
 
-        // Initialize Timber logging
-        Timber.plant(Timber.DebugTree())
+        // Initialize Timber logging only in Debug builds
+        if (BuildConfig.DEBUG) {
+            Timber.plant(Timber.DebugTree())
+        }
         Timber.tag("CommunicationApp").i("Application onCreate")
 
         createNotificationChannels()

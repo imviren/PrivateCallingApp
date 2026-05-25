@@ -56,6 +56,8 @@ class SignalingServer @Inject constructor() {
         serverEngine = embeddedServer(Netty, port = PORT, host = "0.0.0.0") {
             install(WebSockets) {
                 contentConverter = KotlinxWebsocketSerializationConverter(json)
+                pingPeriodMillis = 15000L
+                timeoutMillis = 30000L
             }
             routing {
                 webSocket("/signal") {
