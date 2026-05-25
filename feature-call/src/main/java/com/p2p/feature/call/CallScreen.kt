@@ -119,13 +119,14 @@ private fun RemoteVideoView(
     val context = LocalContext.current
     val manager = remember { context.webRtcManager() }
 
-    if (uiState.remoteVideoTrack != null) {
-        val renderer = remember {
+    val track = uiState.remoteVideoTrack
+    if (track != null) {
+        val renderer = remember(track) {
             SurfaceViewRenderer(context).apply {
                 manager.attachRemoteRenderer(this)
             }
         }
-        DisposableEffect(Unit) {
+        DisposableEffect(track) {
             onDispose { manager.releaseRenderer(renderer) }
         }
         AndroidView(factory = { renderer }, modifier = modifier)

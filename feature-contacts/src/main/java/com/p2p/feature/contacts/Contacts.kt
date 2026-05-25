@@ -38,8 +38,11 @@ class ContactsViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val localAddressSummary: StateFlow<String> = flow {
-        emit(tailscaleDetector.getAddresses().summary())
-    }.stateIn(viewModelScope, SharingStarted.Eagerly, "Detecting address…")
+        while (true) {
+            emit(tailscaleDetector.getAddresses().summary())
+            kotlinx.coroutines.delay(5000L)
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "Detecting address…")
 
     fun addPeer(label: String, address: String) {
         if (label.isBlank() || address.isBlank()) return

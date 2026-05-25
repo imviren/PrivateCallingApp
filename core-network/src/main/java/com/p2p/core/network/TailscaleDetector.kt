@@ -30,7 +30,7 @@ class TailscaleDetector @Inject constructor() {
         var ipv6: String? = null
 
         try {
-            val interfaces = NetworkInterface.getNetworkInterfaces()
+            val interfaces = NetworkInterface.getNetworkInterfaces() ?: return TailscaleAddresses()
             while (interfaces.hasMoreElements()) {
                 val iface = interfaces.nextElement()
                 // On some Android builds, Tailscale uses interface named "tun*" or "tailscale*"

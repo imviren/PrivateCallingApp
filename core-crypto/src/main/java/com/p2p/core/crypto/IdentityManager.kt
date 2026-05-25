@@ -86,6 +86,6 @@ class IdentityManager @Inject constructor() {
                     (hash[3].toInt() and 0xFF)
         val positiveValue = value and 0x7FFFFFFF
         val digits = positiveValue % 1000000
-        return String.format("%06d", digits)
+        return String.format(java.util.Locale.US, "%06d", digits)
     }
 }
