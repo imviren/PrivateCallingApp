@@ -9,4 +9,6 @@ sealed interface WebRtcEvent {
     data class IceConnectionStateChanged(val state: PeerConnection.IceConnectionState) : WebRtcEvent
     data class RemoteTrackAdded(val track: MediaStreamTrack) : WebRtcEvent
     data class Error(val message: String) : WebRtcEvent
+    /** Fired when the PeerConnection needs a new offer (e.g. track added mid-call). */
+    object RenegotiationNeeded : WebRtcEvent
 }

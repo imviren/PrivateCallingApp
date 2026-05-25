@@ -4,6 +4,7 @@ plugins {
   alias(libs.plugins.kotlin.kapt)
   alias(libs.plugins.kotlin.serialization)
   alias(libs.plugins.hilt)
+    alias(libs.plugins.kotlin.compose)
 }
 
 android {
@@ -33,10 +34,6 @@ android {
       aidl = false
       buildConfig = true
       shaders = false
-    }
-
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.14"
     }
 
     packaging {

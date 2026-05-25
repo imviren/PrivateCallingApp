@@ -93,6 +93,12 @@ class SignalingClient @Inject constructor() {
                                         is SignalingMessage.Answer -> SignalingEvent.IncomingAnswer(message)
                                         is SignalingMessage.IceCandidate -> SignalingEvent.IncomingIce(message)
                                         is SignalingMessage.Bye -> SignalingEvent.IncomingBye
+                                        is SignalingMessage.RenegotiateOffer ->
+                                            SignalingEvent.IncomingRenegotiateOffer(message)
+                                        is SignalingMessage.RenegotiateAnswer ->
+                                            SignalingEvent.IncomingRenegotiateAnswer(message)
+                                        is SignalingMessage.TextMessage ->
+                                            SignalingEvent.IncomingTextMessage(message)
                                     }
                                     _events.emit(event)
                                 } catch (e: Exception) {

@@ -41,6 +41,12 @@ class WebRtcManager @Inject constructor(
     private var localAudioSource: AudioSource? = null
     private var surfaceTextureHelper: SurfaceTextureHelper? = null
     private var cachedFrontCameraName: String? = null
+    private val localSinks = mutableListOf<VideoSink>()
+    private val queuedIceCandidates = mutableListOf<IceCandidate>()
+    private val addedIceCandidates = mutableSetOf<String>()
+
+    /** True once camera has been started (video escalation happened). */
+    val hasLocalVideo: Boolean get() = localVideoTrack != null
 
     fun initFactory() {
         if (peerConnectionFactory != null) return
@@ -51,7 +57,10 @@ class WebRtcManager @Inject constructor(
                 .createInitializationOptions()
             PeerConnectionFactory.initialize(initOptions)
 
-            val options = PeerConnectionFactory.Options()
+            val options = PeerConnectionFactory.Options().apply {
+                networkIgnoreMask = 0
+                disableNetworkMonitor = true
+            }
             val encoderFactory = DefaultVideoEncoderFactory(eglBase.eglBaseContext, true, true)
             val decoderFactory = DefaultVideoDecoderFactory(eglBase.eglBaseContext)
 
@@ -71,27 +80,37 @@ class WebRtcManager @Inject constructor(
         }
     }
 
+    /** Audio-only local media — called on every call start. */
     fun initLocalMedia() {
         val factory = peerConnectionFactory ?: throw IllegalStateException("Factory not initialized")
-        if (localVideoTrack != null) return
+        if (localAudioTrack != null) return
 
-        Timber.tag(TAG).i("Initializing local media tracks...")
-        // Audio Track
-        val audioConstraints = MediaConstraints()
+        Timber.tag(TAG).i("Initializing audio track (audio-only)...")
         val isLowEnd = isLowEndDevice()
-        
+        val audioConstraints = MediaConstraints()
         audioConstraints.mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation", "true"))
         audioConstraints.mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression", "true"))
         if (!isLowEnd) {
             audioConstraints.mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl", "true"))
-        } else {
-            Timber.tag(TAG).i("Low-end device detected: disabling Auto Gain Control to conserve CPU")
         }
-        
         localAudioSource = factory.createAudioSource(audioConstraints)
         localAudioTrack = factory.createAudioTrack("ARDAMSa0", localAudioSource)
+    }
 
-        // Video Track
+    /**
+     * Start camera capture and add a video track to the existing PeerConnection.
+     * Call this when the user escalates to a video call.
+     * Emits [WebRtcEvent.RenegotiationNeeded] after adding the track so the ViewModel
+     * can create a new offer/answer.
+     */
+    fun initLocalVideo() {
+        val factory = peerConnectionFactory ?: throw IllegalStateException("Factory not initialized")
+        if (localVideoTrack != null) {
+            Timber.tag(TAG).w("Video track already initialised")
+            return
+        }
+
+        Timber.tag(TAG).i("Escalating to video call — starting camera...")
         val enumerator = Camera2Enumerator(context)
         var selectedDevice = cachedFrontCameraName
         if (selectedDevice == null) {
@@ -102,9 +121,7 @@ class WebRtcManager @Inject constructor(
                     break
                 }
             }
-            if (selectedDevice == null && deviceNames.isNotEmpty()) {
-                selectedDevice = deviceNames[0]
-            }
+            if (selectedDevice == null && deviceNames.isNotEmpty()) selectedDevice = deviceNames[0]
             cachedFrontCameraName = selectedDevice
         }
 
@@ -113,11 +130,24 @@ class WebRtcManager @Inject constructor(
             surfaceTextureHelper = SurfaceTextureHelper.create("CaptureThread", eglBase.eglBaseContext)
             localVideoSource = factory.createVideoSource(videoCapturer!!.isScreencast)
             videoCapturer!!.initialize(surfaceTextureHelper, context, localVideoSource!!.capturerObserver)
-            // Resolution: 640x480 at 24 fps (reduces CPU & battery drain)
             videoCapturer!!.startCapture(640, 480, 24)
 
-            localVideoTrack = factory.createVideoTrack("ARDAMSv0", localVideoSource)
-            localVideoTrack?.setEnabled(true)
+            synchronized(this) {
+                localVideoTrack = factory.createVideoTrack("ARDAMSv0", localVideoSource)
+                localVideoTrack?.setEnabled(true)
+                for (sink in localSinks) {
+                    localVideoTrack?.addSink(sink)
+                }
+            }
+
+            // Add track to existing peer connection → triggers renegotiation
+            peerConnection?.let { pc ->
+                localVideoTrack?.let { track ->
+                    pc.addTrack(track, listOf("ARDAMS"))
+                    Timber.tag(TAG).i("Video track added to PeerConnection — renegotiation needed")
+                    // onRenegotiationNeeded callback will fire automatically
+                }
+            }
         } else {
             Timber.tag(TAG).w("No camera device found.")
         }
@@ -128,10 +158,72 @@ class WebRtcManager @Inject constructor(
         if (peerConnection != null) return
 
         Timber.tag(TAG).i("Creating PeerConnection...")
-        // Using Cloudflare TURN or basic config
+
+        // Free public TURN servers for testing across NAT / emulator boundaries.
+        // Replace with a private TURN server for production.
+        // Generate dynamic credentials for openrelay project staticauth server
+        val timestamp = (System.currentTimeMillis() / 1000) + 24 * 3600 // Valid for 24 hours
+        val dynamicUsername = "$timestamp:p2papp"
+        val dynamicPassword = getHmacSha1(dynamicUsername, "openrelayprojectsecret")
+
+        // Free public TURN servers for testing across NAT / emulator boundaries.
+        // Both domain and IP configurations are included to bypass DNS failures.
         val iceServers = listOf(
+            // 1. Google STUN (Domain & IP)
             PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer(),
-            // In Phase 5 we can add cloudflare TURN credential here
+            PeerConnection.IceServer.builder("stun:stun1.l.google.com:19302").createIceServer(),
+            PeerConnection.IceServer.builder("stun:stun2.l.google.com:19302").createIceServer(),
+            PeerConnection.IceServer.builder("stun:stun3.l.google.com:19302").createIceServer(),
+            PeerConnection.IceServer.builder("stun:stun4.l.google.com:19302").createIceServer(),
+            PeerConnection.IceServer.builder("stun:74.125.250.129:19302").createIceServer(),
+
+            // 2. Open Relay Project (Static Public credentials)
+            PeerConnection.IceServer.builder("turn:openrelay.metered.ca:80")
+                .setUsername("openrelayproject").setPassword("openrelayproject").createIceServer(),
+            PeerConnection.IceServer.builder("turn:openrelay.metered.ca:443")
+                .setUsername("openrelayproject").setPassword("openrelayproject").createIceServer(),
+            PeerConnection.IceServer.builder("turn:openrelay.metered.ca:443?transport=tcp")
+                .setUsername("openrelayproject").setPassword("openrelayproject").createIceServer(),
+            PeerConnection.IceServer.builder("turns:openrelay.metered.ca:443")
+                .setUsername("openrelayproject").setPassword("openrelayproject").createIceServer(),
+            PeerConnection.IceServer.builder("turns:openrelay.metered.ca:443?transport=tcp")
+                .setUsername("openrelayproject").setPassword("openrelayproject").createIceServer(),
+
+            // 2.1. Open Relay Project Static Public credentials (IP-based fallbacks)
+            PeerConnection.IceServer.builder("turn:15.235.47.158:80")
+                .setUsername("openrelayproject").setPassword("openrelayproject").createIceServer(),
+            PeerConnection.IceServer.builder("turn:15.235.47.158:443")
+                .setUsername("openrelayproject").setPassword("openrelayproject").createIceServer(),
+            PeerConnection.IceServer.builder("turn:15.235.47.158:443?transport=tcp")
+                .setUsername("openrelayproject").setPassword("openrelayproject").createIceServer(),
+            PeerConnection.IceServer.builder("turns:15.235.47.158:443")
+                .setUsername("openrelayproject").setPassword("openrelayproject").createIceServer(),
+            PeerConnection.IceServer.builder("turns:15.235.47.158:443?transport=tcp")
+                .setUsername("openrelayproject").setPassword("openrelayproject").createIceServer(),
+
+            // 3. Open Relay Project (Dynamic Shared Secret Credentials)
+            PeerConnection.IceServer.builder("turn:staticauth.openrelay.metered.ca:80")
+                .setUsername(dynamicUsername).setPassword(dynamicPassword).createIceServer(),
+            PeerConnection.IceServer.builder("turn:staticauth.openrelay.metered.ca:443")
+                .setUsername(dynamicUsername).setPassword(dynamicPassword).createIceServer(),
+            PeerConnection.IceServer.builder("turn:staticauth.openrelay.metered.ca:443?transport=tcp")
+                .setUsername(dynamicUsername).setPassword(dynamicPassword).createIceServer(),
+            PeerConnection.IceServer.builder("turns:staticauth.openrelay.metered.ca:443")
+                .setUsername(dynamicUsername).setPassword(dynamicPassword).createIceServer(),
+            PeerConnection.IceServer.builder("turns:staticauth.openrelay.metered.ca:443?transport=tcp")
+                .setUsername(dynamicUsername).setPassword(dynamicPassword).createIceServer(),
+
+            // 3.1. Open Relay Project Dynamic Credentials (IP-based fallbacks)
+            PeerConnection.IceServer.builder("turn:216.39.253.123:80")
+                .setUsername(dynamicUsername).setPassword(dynamicPassword).createIceServer(),
+            PeerConnection.IceServer.builder("turn:216.39.253.123:443")
+                .setUsername(dynamicUsername).setPassword(dynamicPassword).createIceServer(),
+            PeerConnection.IceServer.builder("turn:216.39.253.123:443?transport=tcp")
+                .setUsername(dynamicUsername).setPassword(dynamicPassword).createIceServer(),
+            PeerConnection.IceServer.builder("turns:216.39.253.123:443")
+                .setUsername(dynamicUsername).setPassword(dynamicPassword).createIceServer(),
+            PeerConnection.IceServer.builder("turns:216.39.253.123:443?transport=tcp")
+                .setUsername(dynamicUsername).setPassword(dynamicPassword).createIceServer(),
         )
 
         val rtcConfig = PeerConnection.RTCConfiguration(iceServers).apply {
@@ -140,25 +232,31 @@ class WebRtcManager @Inject constructor(
         }
 
         val observer = object : PeerConnection.Observer {
-            override fun onSignalingChange(state: PeerConnection.SignalingState) {}
+            override fun onSignalingChange(state: PeerConnection.SignalingState) {
+                Timber.tag(TAG).d("Signaling state changed to: %s", state)
+            }
 
             override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
-                Timber.tag(TAG).i("ICE connection state changed to: $state")
+                Timber.tag(TAG).i("ICE connection state changed to: %s", state)
                 _events.tryEmit(WebRtcEvent.IceConnectionStateChanged(state))
             }
 
-            override fun onIceConnectionReceivingChange(receiving: Boolean) {}
+            override fun onIceConnectionReceivingChange(receiving: Boolean) {
+                Timber.tag(TAG).d("ICE connection receiving changed: %b", receiving)
+            }
 
             override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) {
-                Timber.tag(TAG).i("ICE gathering state changed to: $state")
+                Timber.tag(TAG).i("ICE gathering state changed to: %s", state)
             }
 
             override fun onIceCandidate(candidate: IceCandidate) {
-                Timber.tag(TAG).d("New local ICE candidate: %s", candidate)
+                Timber.tag(TAG).d("New local ICE candidate gathered: sdpMid=%s, sdpMLineIndex=%d, candidate=%s", candidate.sdpMid, candidate.sdpMLineIndex, candidate.sdp)
                 _events.tryEmit(WebRtcEvent.LocalIceCandidate(candidate))
             }
 
-            override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>?) {}
+            override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>?) {
+                Timber.tag(TAG).d("Local ICE candidates removed: %s", candidates?.contentToString())
+            }
 
             override fun onAddStream(stream: MediaStream) {}
 
@@ -166,7 +264,10 @@ class WebRtcManager @Inject constructor(
 
             override fun onDataChannel(dataChannel: DataChannel) {}
 
-            override fun onRenegotiationNeeded() {}
+            override fun onRenegotiationNeeded() {
+                Timber.tag(TAG).i("onRenegotiationNeeded fired")
+                _events.tryEmit(WebRtcEvent.RenegotiationNeeded)
+            }
 
             override fun onAddTrack(receiver: RtpReceiver, mediaStreams: Array<out MediaStream>) {
                 val track = receiver.track()
@@ -182,11 +283,8 @@ class WebRtcManager @Inject constructor(
 
         peerConnection = factory.createPeerConnection(rtcConfig, observer)
 
-        // Add local tracks to Connection
+        // Add only audio track initially; video is added on demand via initLocalVideo()
         localAudioTrack?.let {
-            peerConnection?.addTrack(it, listOf("ARDAMS"))
-        }
-        localVideoTrack?.let {
             peerConnection?.addTrack(it, listOf("ARDAMS"))
         }
     }
@@ -202,9 +300,7 @@ class WebRtcManager @Inject constructor(
             override fun onCreateSuccess(desc: SessionDescription) {
                 pc.setLocalDescription(object : SdpObserver {
                     override fun onCreateSuccess(p0: SessionDescription?) {}
-                    override fun onSetSuccess() {
-                        callback(desc)
-                    }
+                    override fun onSetSuccess() { callback(desc) }
                     override fun onCreateFailure(p0: String?) {}
                     override fun onSetFailure(p0: String?) {
                         Timber.tag(TAG).e("SetLocalDescription failed: $p0")
@@ -231,9 +327,7 @@ class WebRtcManager @Inject constructor(
             override fun onCreateSuccess(desc: SessionDescription) {
                 pc.setLocalDescription(object : SdpObserver {
                     override fun onCreateSuccess(p0: SessionDescription?) {}
-                    override fun onSetSuccess() {
-                        callback(desc)
-                    }
+                    override fun onSetSuccess() { callback(desc) }
                     override fun onCreateFailure(p0: String?) {}
                     override fun onSetFailure(p0: String?) {
                         Timber.tag(TAG).e("SetLocalDescription failed: $p0")
@@ -249,12 +343,14 @@ class WebRtcManager @Inject constructor(
         }, constraints)
     }
 
-    fun setRemoteDescription(sdp: SessionDescription) {
+    fun setRemoteDescription(sdp: SessionDescription, onSuccess: (() -> Unit)? = null) {
         val pc = peerConnection ?: return
         pc.setRemoteDescription(object : SdpObserver {
             override fun onCreateSuccess(p0: SessionDescription?) {}
             override fun onSetSuccess() {
                 Timber.tag(TAG).i("Remote description set successfully")
+                drainQueuedIceCandidates()
+                onSuccess?.invoke()
             }
             override fun onCreateFailure(p0: String?) {}
             override fun onSetFailure(p0: String?) {
@@ -264,7 +360,46 @@ class WebRtcManager @Inject constructor(
     }
 
     fun addIceCandidate(candidate: IceCandidate) {
-        peerConnection?.addIceCandidate(candidate)
+        val pc = peerConnection
+        if (pc != null && pc.remoteDescription != null) {
+            synchronized(addedIceCandidates) {
+                if (addedIceCandidates.add(candidate.sdp)) {
+                    pc.addIceCandidate(candidate)
+                }
+            }
+        } else {
+            synchronized(queuedIceCandidates) {
+                if (!queuedIceCandidates.any { it.sdp == candidate.sdp }) {
+                    Timber.tag(TAG).d("Queuing ICE candidate (remoteDescription not set): %s", candidate)
+                    queuedIceCandidates.add(candidate)
+                }
+            }
+        }
+    }
+
+    private fun drainQueuedIceCandidates() {
+        val pc = peerConnection ?: return
+        synchronized(queuedIceCandidates) {
+            Timber.tag(TAG).i("Draining %d queued ICE candidates", queuedIceCandidates.size)
+            synchronized(addedIceCandidates) {
+                for (candidate in queuedIceCandidates) {
+                    if (addedIceCandidates.add(candidate.sdp)) {
+                        pc.addIceCandidate(candidate)
+                    }
+                }
+            }
+            queuedIceCandidates.clear()
+        }
+    }
+
+    fun setAudioEnabled(enabled: Boolean) {
+        localAudioTrack?.setEnabled(enabled)
+        Timber.tag(TAG).i("Audio enabled: $enabled")
+    }
+
+    fun setCameraEnabled(enabled: Boolean) {
+        localVideoTrack?.setEnabled(enabled)
+        Timber.tag(TAG).i("Camera enabled: $enabled")
     }
 
     fun attachLocalRenderer(renderer: SurfaceViewRenderer) {
@@ -272,7 +407,10 @@ class WebRtcManager @Inject constructor(
         renderer.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
         renderer.setEnableHardwareScaler(true)
         renderer.setMirror(true)
-        localVideoTrack?.addSink(renderer)
+        synchronized(this) {
+            localSinks.add(renderer)
+            localVideoTrack?.addSink(renderer)
+        }
     }
 
     fun attachRemoteRenderer(renderer: SurfaceViewRenderer) {
@@ -284,8 +422,11 @@ class WebRtcManager @Inject constructor(
 
     fun releaseRenderer(renderer: SurfaceViewRenderer) {
         try {
-            localVideoTrack?.removeSink(renderer)
-            remoteVideoTrack?.removeSink(renderer)
+            synchronized(this) {
+                localSinks.remove(renderer)
+                localVideoTrack?.removeSink(renderer)
+                remoteVideoTrack?.removeSink(renderer)
+            }
             renderer.release()
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "Error releasing renderer")
@@ -317,6 +458,9 @@ class WebRtcManager @Inject constructor(
         localVideoTrack = null
         localAudioTrack = null
         remoteVideoTrack = null
+        synchronized(this) { localSinks.clear() }
+        synchronized(queuedIceCandidates) { queuedIceCandidates.clear() }
+        synchronized(addedIceCandidates) { addedIceCandidates.clear() }
     }
 
     private fun replaceRemoteVideoTrack(newTrack: VideoTrack) {
@@ -335,15 +479,31 @@ class WebRtcManager @Inject constructor(
     private fun isLowEndDevice(): Boolean {
         val runtime = Runtime.getRuntime()
         val availableHeap = runtime.maxMemory() / (1024 * 1024)
-        
+
         val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
         val memInfo = android.app.ActivityManager.MemoryInfo()
         activityManager.getMemoryInfo(memInfo)
         val totalRamGB = memInfo.totalMem / (1024 * 1024 * 1024)
-        
+
         val cpuCores = Runtime.getRuntime().availableProcessors()
-        
-        Timber.tag(TAG).i("Device Profiling - Available Heap: %dMB, Total RAM: %dGB, CPU Cores: %d", availableHeap, totalRamGB, cpuCores)
+
+        Timber.tag(TAG).i(
+            "Device Profiling - Available Heap: %dMB, Total RAM: %dGB, CPU Cores: %d",
+            availableHeap, totalRamGB, cpuCores
+        )
         return availableHeap < 256 || totalRamGB < 2 || cpuCores < 4
+    }
+
+    private fun getHmacSha1(value: String, key: String): String {
+        return try {
+            val keySpec = javax.crypto.spec.SecretKeySpec(key.toByteArray(Charsets.UTF_8), "HmacSHA1")
+            val mac = javax.crypto.Mac.getInstance("HmacSHA1")
+            mac.init(keySpec)
+            val result = mac.doFinal(value.toByteArray(Charsets.UTF_8))
+            android.util.Base64.encodeToString(result, android.util.Base64.NO_WRAP)
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "Failed to compute HMAC-SHA1")
+            ""
+        }
     }
 }

@@ -19,6 +19,8 @@ class SignalingService : Service() {
         const val NOTIFICATION_ID = 1001
         const val CHANNEL_ID = "ch_signaling"
         private const val TAG = "SignalingService"
+        const val ACTION_START_CALL = "com.p2p.ACTION_START_CALL"
+        const val ACTION_END_CALL = "com.p2p.ACTION_END_CALL"
     }
 
     @Inject
@@ -36,6 +38,15 @@ class SignalingService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Timber.tag(TAG).i("SignalingService onStartCommand")
         signalingServer.start()
+
+        intent?.action?.let { action ->
+            Timber.tag(TAG).i("onStartCommand action: $action")
+            when (action) {
+                ACTION_START_CALL -> updateForegroundServiceType(true)
+                ACTION_END_CALL -> updateForegroundServiceType(false)
+            }
+        }
+
         // Sticky so system restarts service if killed
         return START_STICKY
     }
@@ -51,6 +62,10 @@ class SignalingService : Service() {
     }
 
     private fun startForegroundServiceNotification() {
+        updateForegroundServiceType(false)
+    }
+
+    private fun updateForegroundServiceType(inCall: Boolean) {
         val addrs = tailscaleDetector.getAddresses()
         val addressSummary = if (addrs.isEmpty()) {
             "Address: No Tailscale IP found"
@@ -58,10 +73,13 @@ class SignalingService : Service() {
             "IP: ${addrs.ipv4 ?: addrs.ipv6}"
         }
 
+        val title = if (inCall) "Active Call" else "Private VoIP Signaling Active"
+        val content = if (inCall) "Voice/video connection is active" else "Listening on $addressSummary:${SignalingServer.PORT}"
+
         // Build a notification for the foreground service
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Private VoIP Signaling Active")
-            .setContentText("Listening on $addressSummary:${SignalingServer.PORT}")
+            .setContentTitle(title)
+            .setContentText(content)
             .setSmallIcon(android.R.drawable.ic_menu_call) // Standard system icon for simplicity
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -69,16 +87,14 @@ class SignalingService : Service() {
             .build()
 
         var type = 0
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val hasCamera = androidx.core.content.ContextCompat.checkSelfPermission(
-                this, android.Manifest.permission.CAMERA
-            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-            val hasMic = androidx.core.content.ContextCompat.checkSelfPermission(
-                this, android.Manifest.permission.RECORD_AUDIO
-            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-
-            if (hasCamera) type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
-            if (hasMic) type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            type = if (inCall) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            } else {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            }
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {

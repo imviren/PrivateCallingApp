@@ -28,15 +28,13 @@ class MainActivity : ComponentActivity() {
         val cameraGranted = permissions[Manifest.permission.CAMERA] ?: false
         val audioGranted = permissions[Manifest.permission.RECORD_AUDIO] ?: false
         Timber.tag("MainActivity").i("Permissions callback: camera=$cameraGranted, audio=$audioGranted")
-        if (cameraGranted && audioGranted) {
-            startSignalingService()
-        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
+        startSignalingService()
         checkAndRequestPermissions()
 
         setContent {
@@ -68,9 +66,6 @@ class MainActivity : ComponentActivity() {
 
         if (permissionsToRequest.isNotEmpty()) {
             requestPermissionLauncher.launch(permissionsToRequest.toTypedArray())
-        } else {
-            // Already granted
-            startSignalingService()
         }
     }
 

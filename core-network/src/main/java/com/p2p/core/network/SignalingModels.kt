@@ -32,6 +32,31 @@ sealed class SignalingMessage {
     @Serializable
     @SerialName("bye")
     object Bye : SignalingMessage()
+
+    /** Mid-call renegotiation offer (e.g. when video is escalated). */
+    @Serializable
+    @SerialName("renegotiate_offer")
+    data class RenegotiateOffer(
+        val callId: String,
+        val sdp: String
+    ) : SignalingMessage()
+
+    /** Mid-call renegotiation answer. */
+    @Serializable
+    @SerialName("renegotiate_answer")
+    data class RenegotiateAnswer(
+        val callId: String,
+        val sdp: String
+    ) : SignalingMessage()
+
+    /** In-call text chat message. */
+    @Serializable
+    @SerialName("text")
+    data class TextMessage(
+        val callId: String,
+        val text: String,
+        val senderLabel: String = ""
+    ) : SignalingMessage()
 }
 
 sealed interface SignalingEvent {
@@ -41,4 +66,7 @@ sealed interface SignalingEvent {
     data class IncomingAnswer(val message: SignalingMessage.Answer) : SignalingEvent
     data class IncomingIce(val message: SignalingMessage.IceCandidate) : SignalingEvent
     object IncomingBye : SignalingEvent
+    data class IncomingRenegotiateOffer(val message: SignalingMessage.RenegotiateOffer) : SignalingEvent
+    data class IncomingRenegotiateAnswer(val message: SignalingMessage.RenegotiateAnswer) : SignalingEvent
+    data class IncomingTextMessage(val message: SignalingMessage.TextMessage) : SignalingEvent
 }

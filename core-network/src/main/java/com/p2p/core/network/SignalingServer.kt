@@ -41,6 +41,30 @@ class SignalingServer @Inject constructor() {
 
     private var activeSession: DefaultWebSocketSession? = null
 
+    var remoteHost: String = ""
+        private set
+
+    var pendingOffer: SignalingMessage.Offer? = null
+        private set
+
+    private val pendingIceCandidates = mutableListOf<SignalingMessage.IceCandidate>()
+
+    fun getAndClearPendingIceCandidates(): List<SignalingMessage.IceCandidate> {
+        return synchronized(pendingIceCandidates) {
+            val list = pendingIceCandidates.toList()
+            pendingIceCandidates.clear()
+            list
+        }
+    }
+
+    fun clearPendingCall() {
+        pendingOffer = null
+        remoteHost = ""
+        synchronized(pendingIceCandidates) {
+            pendingIceCandidates.clear()
+        }
+    }
+
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
@@ -61,7 +85,9 @@ class SignalingServer @Inject constructor() {
             }
             routing {
                 webSocket("/signal") {
-                    Timber.tag(TAG).i("Client connected from ${call.request.origin.remoteHost}")
+                    val host = call.request.origin.remoteHost
+                    Timber.tag(TAG).i("Client connected from $host")
+                    remoteHost = host
                     activeSession = this
                     _events.tryEmit(SignalingEvent.Connected)
 
@@ -73,10 +99,24 @@ class SignalingServer @Inject constructor() {
                                 try {
                                     val message = json.decodeFromString<SignalingMessage>(text)
                                     val event = when (message) {
-                                        is SignalingMessage.Offer -> SignalingEvent.IncomingOffer(message)
+                                        is SignalingMessage.Offer -> {
+                                            pendingOffer = message
+                                            SignalingEvent.IncomingOffer(message)
+                                        }
                                         is SignalingMessage.Answer -> SignalingEvent.IncomingAnswer(message)
-                                        is SignalingMessage.IceCandidate -> SignalingEvent.IncomingIce(message)
+                                        is SignalingMessage.IceCandidate -> {
+                                            synchronized(pendingIceCandidates) {
+                                                pendingIceCandidates.add(message)
+                                            }
+                                            SignalingEvent.IncomingIce(message)
+                                        }
                                         is SignalingMessage.Bye -> SignalingEvent.IncomingBye
+                                        is SignalingMessage.RenegotiateOffer ->
+                                            SignalingEvent.IncomingRenegotiateOffer(message)
+                                        is SignalingMessage.RenegotiateAnswer ->
+                                            SignalingEvent.IncomingRenegotiateAnswer(message)
+                                        is SignalingMessage.TextMessage ->
+                                            SignalingEvent.IncomingTextMessage(message)
                                     }
                                     _events.tryEmit(event)
                                 } catch (e: Exception) {
