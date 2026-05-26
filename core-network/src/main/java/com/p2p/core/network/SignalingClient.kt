@@ -89,16 +89,22 @@ class SignalingClient @Inject constructor() {
                                 try {
                                     val message = json.decodeFromString<SignalingMessage>(text)
                                     val event = when (message) {
-                                        is SignalingMessage.Offer -> SignalingEvent.IncomingOffer(message)
-                                        is SignalingMessage.Answer -> SignalingEvent.IncomingAnswer(message)
-                                        is SignalingMessage.IceCandidate -> SignalingEvent.IncomingIce(message)
-                                        is SignalingMessage.Bye -> SignalingEvent.IncomingBye
+                                        is SignalingMessage.Offer ->
+                                            SignalingEvent.IncomingOffer(message)
+                                        is SignalingMessage.Answer ->
+                                            SignalingEvent.IncomingAnswer(message)
+                                        is SignalingMessage.IceCandidate ->
+                                            SignalingEvent.IncomingIce(message)
+                                        is SignalingMessage.Bye ->
+                                            SignalingEvent.IncomingBye
                                         is SignalingMessage.RenegotiateOffer ->
                                             SignalingEvent.IncomingRenegotiateOffer(message)
                                         is SignalingMessage.RenegotiateAnswer ->
                                             SignalingEvent.IncomingRenegotiateAnswer(message)
                                         is SignalingMessage.TextMessage ->
                                             SignalingEvent.IncomingTextMessage(message)
+                                        is SignalingMessage.TextSessionMessage ->
+                                            SignalingEvent.IncomingTextSessionMessage(message)
                                     }
                                     _events.emit(event)
                                 } catch (e: Exception) {

@@ -9,6 +9,9 @@ import com.p2p.core.network.SignalingEvent
 import com.p2p.core.network.SignalingMessage
 import com.p2p.core.network.SignalingServer
 import com.p2p.core.network.TailscaleDetector
+import com.p2p.core.storage.CallLogDao
+import com.p2p.core.storage.CallLogEntity
+import com.p2p.core.storage.CallType
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -70,8 +73,13 @@ class CallViewModel @Inject constructor(
     private val signalingServer: SignalingServer,
     private val signalingClient: SignalingClient,
     private val tailscaleDetector: TailscaleDetector,
+    private val callLogDao: CallLogDao,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
+
+    // ── Call log tracking ─────────────────────────────────────────────────────
+    private var callStartTimeMs: Long = 0L
+    private var callAnswered: Boolean = false
 
     companion object {
         private const val TAG = "CallViewModel"
@@ -124,8 +132,10 @@ class CallViewModel @Inject constructor(
     fun startCall(peerAddress: String) {
         if (_uiState.value.callState != CallState.IDLE) return
 
-        callRole      = CallRole.CALLER
-        currentCallId = UUID.randomUUID().toString()
+        callRole       = CallRole.CALLER
+        currentCallId  = UUID.randomUUID().toString()
+        callStartTimeMs = System.currentTimeMillis()
+        callAnswered    = false
 
         _uiState.update { it.copy(callState = CallState.OUTGOING, peerAddress = peerAddress) }
 
@@ -143,7 +153,9 @@ class CallViewModel @Inject constructor(
 
     fun setIncomingCall(peerAddress: String) {
         if (_uiState.value.callState != CallState.IDLE) return
-        callRole = CallRole.CALLEE
+        callRole        = CallRole.CALLEE
+        callStartTimeMs = System.currentTimeMillis()
+        callAnswered    = false
         _uiState.update { it.copy(callState = CallState.INCOMING, peerAddress = peerAddress) }
         Timber.tag(TAG).i("setIncomingCall: waiting for accept from $peerAddress")
         startRingtone()
@@ -156,6 +168,7 @@ class CallViewModel @Inject constructor(
             return
         }
         currentCallId = offer.callId
+        callAnswered  = true
 
         // Apply any early ICE candidates received before accepting
         val earlyIce = signalingServer.getAndClearPendingIceCandidates()
@@ -326,6 +339,11 @@ class CallViewModel @Inject constructor(
                     updateSignalingServiceCallState(false)
                 }
             }
+
+            // ── Standalone text session message (handled by TextChatViewModel) ──
+            is SignalingEvent.IncomingTextSessionMessage -> {
+                Timber.tag(TAG).d("Ignoring TextSessionMessage in CallViewModel")
+            }
         }
     }
 
@@ -465,6 +483,30 @@ class CallViewModel @Inject constructor(
     private suspend fun cleanup() {
         Timber.tag(TAG).i("cleanup()")
         stopRingtone()
+
+        // ── Persist call log ──────────────────────────────────────────────────
+        val peer = _uiState.value.peerAddress
+        if (peer.isNotBlank() && callStartTimeMs > 0L) {
+            val durationSec = (System.currentTimeMillis() - callStartTimeMs) / 1000L
+            val type = when {
+                callRole == CallRole.CALLER -> CallType.OUTGOING
+                callAnswered               -> CallType.INCOMING
+                else                       -> CallType.MISSED
+            }
+            callLogDao.insert(
+                CallLogEntity(
+                    peerLabel       = peer,
+                    peerAddress     = peer,
+                    callType        = type,
+                    startedAt       = callStartTimeMs,
+                    durationSeconds = if (type == CallType.MISSED) 0L else durationSec,
+                )
+            )
+        }
+        callStartTimeMs = 0L
+        callAnswered    = false
+        // ─────────────────────────────────────────────────────────────────────
+
         _uiState.update { it.copy(callState = CallState.ENDED, remoteVideoTrack = null, isVideoActive = false, isChatOpen = false) }
         webRtcManager.dispose()
         signalingClient.disconnect()

@@ -9,6 +9,7 @@ import androidx.compose.ui.platform.LocalContext
 import com.p2p.core.network.SignalingServer
 import com.p2p.core.network.SignalingEvent
 import com.p2p.feature.call.CallScreen
+import com.p2p.feature.call.TextChatScreen
 import com.p2p.feature.contacts.ContactsScreen
 import dagger.hilt.android.EntryPointAccessors
 
@@ -43,6 +44,9 @@ fun MainNavigation() {
             ContactsScreen(
                 onDialPeer = { address ->
                     backStack.add(Call(address, isIncoming = false))
+                },
+                onTextPeer = { address, label ->
+                    backStack.add(TextChat(address, label))
                 }
             )
         }
@@ -57,6 +61,18 @@ fun MainNavigation() {
                     if (backStack.size > 1) {
                         backStack.removeLast()
                     }
+                }
+            )
+        }
+        is TextChat -> {
+            BackHandler(enabled = backStack.size > 1) {
+                backStack.removeLast()
+            }
+            TextChatScreen(
+                peerAddress = currentScreen.peerAddress,
+                peerLabel   = currentScreen.peerLabel,
+                onClose     = {
+                    if (backStack.size > 1) backStack.removeLast()
                 }
             )
         }

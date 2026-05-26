@@ -103,20 +103,24 @@ class SignalingServer @Inject constructor() {
                                             pendingOffer = message
                                             SignalingEvent.IncomingOffer(message)
                                         }
-                                        is SignalingMessage.Answer -> SignalingEvent.IncomingAnswer(message)
+                                        is SignalingMessage.Answer ->
+                                            SignalingEvent.IncomingAnswer(message)
                                         is SignalingMessage.IceCandidate -> {
                                             synchronized(pendingIceCandidates) {
                                                 pendingIceCandidates.add(message)
                                             }
                                             SignalingEvent.IncomingIce(message)
                                         }
-                                        is SignalingMessage.Bye -> SignalingEvent.IncomingBye
+                                        is SignalingMessage.Bye ->
+                                            SignalingEvent.IncomingBye
                                         is SignalingMessage.RenegotiateOffer ->
                                             SignalingEvent.IncomingRenegotiateOffer(message)
                                         is SignalingMessage.RenegotiateAnswer ->
                                             SignalingEvent.IncomingRenegotiateAnswer(message)
                                         is SignalingMessage.TextMessage ->
                                             SignalingEvent.IncomingTextMessage(message)
+                                        is SignalingMessage.TextSessionMessage ->
+                                            SignalingEvent.IncomingTextSessionMessage(message)
                                     }
                                     _events.tryEmit(event)
                                 } catch (e: Exception) {

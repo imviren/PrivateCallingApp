@@ -1,24 +1,34 @@
 package com.p2p.feature.contacts
 
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Call
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Save
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.ClipboardManager
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -28,11 +38,27 @@ import com.p2p.core.network.TailscaleScanner
 import com.p2p.core.network.DiscoveredDevice
 import com.p2p.core.storage.PeerDao
 import com.p2p.core.storage.PeerEntity
+import com.p2p.feature.call.CallHistorySection
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import timber.log.Timber
 import javax.inject.Inject
+
+// ── Colours (local aliases) ───────────────────────────────────────────────────
+
+private val NeonBlue   = Color(0xFF4D94FF)
+private val NeonPurple = Color(0xFFC580FF)
+private val AccentGreen = Color(0xFF00E676)
+private val ErrorRed   = Color(0xFFFF5252)
+private val BgDeep     = Color(0xFF07070A)
+private val SurfaceCard = Color(0xFF101018)
+private val SurfaceVariant = Color(0xFF1A1A26)
+
+private val GradientPrimary = Brush.horizontalGradient(listOf(NeonBlue, NeonPurple))
+private val GradientHeader  = Brush.verticalGradient(
+    listOf(Color(0xFF0D1B3E), Color(0xFF07070A))
+)
 
 // ── ViewModel ─────────────────────────────────────────────────────────────────
 
@@ -78,9 +104,7 @@ class ContactsViewModel @Inject constructor(
     }.flowOn(kotlinx.coroutines.Dispatchers.IO)
      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "Detecting room…")
 
-    init {
-        startTailscaleScan()
-    }
+    init { startTailscaleScan() }
 
     fun setDeepScanEnabled(enabled: Boolean) {
         _deepScanEnabled.value = enabled
@@ -137,6 +161,7 @@ class ContactsViewModel @Inject constructor(
 @Composable
 fun ContactsScreen(
     onDialPeer: (address: String) -> Unit,
+    onTextPeer: (address: String, label: String) -> Unit,
     viewModel: ContactsViewModel = hiltViewModel(),
 ) {
     val peers             by viewModel.peers.collectAsStateWithLifecycle()
@@ -148,222 +173,366 @@ fun ContactsScreen(
     val customRoomName    by viewModel.customRoomName.collectAsStateWithLifecycle()
     val activeRoomName    by viewModel.activeRoomName.collectAsStateWithLifecycle()
 
-    var showAddDialog by remember { mutableStateOf(false) }
+    var showAddDialog  by remember { mutableStateOf(false) }
     var showRoomDialog by remember { mutableStateOf(false) }
 
-    Scaffold(
-        floatingActionButton = {
-            FloatingActionButton(onClick = { showAddDialog = true }) {
-                Icon(Icons.Default.Add, contentDescription = "Add peer")
-            }
-        }
-    ) { padding ->
+    val listState = rememberLazyListState()
+    val fabExpanded by remember { derivedStateOf { !listState.isScrollInProgress } }
+    val clipboard = LocalClipboardManager.current
+
+    Box(modifier = Modifier.fillMaxSize().background(BgDeep)) {
         LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            state   = listState,
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(0.dp),
         ) {
-            // ── Local address card ────────────────────────────────────────────
+            // ── Gradient header ───────────────────────────────────────────────
             item {
-                Spacer(Modifier.height(16.dp))
-                Text(
-                    text  = "Your addresses",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                Spacer(Modifier.height(4.dp))
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier.fillMaxWidth(),
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(GradientHeader)
+                        .statusBarsPadding()
+                        .padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 16.dp)
                 ) {
-                    Text(
-                        text     = myAddrs.ifBlank { "Not detected – is Tailscale running?" },
-                        modifier = Modifier.padding(12.dp),
-                        style    = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                        color    = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    Column {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column {
+                                Text(
+                                    "SecureComm",
+                                    style = MaterialTheme.typography.headlineSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White,
+                                )
+                                Text(
+                                    "End-to-end encrypted P2P",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.White.copy(alpha = 0.5f),
+                                )
+                            }
+                            // Status dot
+                            Box(
+                                modifier = Modifier
+                                    .size(10.dp)
+                                    .background(AccentGreen, CircleShape)
+                            )
+                        }
+
+                        Spacer(Modifier.height(16.dp))
+
+                        // My IP card
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(0xFF0A1729))
+                                .border(
+                                    width = 1.dp,
+                                    brush = Brush.horizontalGradient(
+                                        listOf(NeonBlue.copy(alpha = 0.4f), NeonPurple.copy(alpha = 0.4f))
+                                    ),
+                                    shape = RoundedCornerShape(12.dp)
+                                )
+                                .padding(12.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    Icons.Default.WifiTethering,
+                                    contentDescription = null,
+                                    tint = NeonBlue,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = myAddrs.ifBlank { "Not detected – is Tailscale running?" },
+                                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                                    color = Color(0xFF90CAF9),
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                IconButton(
+                                    onClick = { clipboard.setText(AnnotatedString(myAddrs)) },
+                                    modifier = Modifier.size(24.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Default.ContentCopy,
+                                        contentDescription = "Copy IP",
+                                        tint = NeonBlue.copy(alpha = 0.7f),
+                                        modifier = Modifier.size(14.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
-            // ── Tailscale Section Header ──────────────────────────────────────
+            // ── Tailscale section header ──────────────────────────────────────
             item {
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(12.dp))
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text  = "Tailscale Devices (Auto-Discovered)",
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
+                        SectionLabel("Auto-Discovered Devices")
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = "Active Room: $activeRoomName",
+                                text = "Room: $activeRoomName",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.outline
+                                color = Color.White.copy(alpha = 0.4f),
                             )
                             Spacer(Modifier.width(4.dp))
                             IconButton(
                                 onClick = { showRoomDialog = true },
-                                modifier = Modifier.size(16.dp)
+                                modifier = Modifier.size(16.dp),
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.Edit,
+                                    Icons.Default.Edit,
                                     contentDescription = "Edit Room",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(12.dp)
+                                    tint = NeonBlue,
+                                    modifier = Modifier.size(12.dp),
                                 )
                             }
                         }
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = "Deep Scan",
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(end = 4.dp),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            "Deep",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.5f),
+                            modifier = Modifier.padding(end = 2.dp),
                         )
                         Switch(
                             checked = deepScanEnabled,
                             onCheckedChange = { viewModel.setDeepScanEnabled(it) },
-                            thumbContent = null,
-                            modifier = Modifier.scale(0.8f)
+                            modifier = Modifier.scale(0.7f),
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = NeonBlue,
+                                checkedTrackColor = NeonBlue.copy(alpha = 0.3f),
+                            )
                         )
                         IconButton(onClick = { viewModel.startTailscaleScan() }) {
-                            Icon(Icons.Default.Refresh, contentDescription = "Refresh Tailscale devices")
+                            Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = NeonBlue)
                         }
                     }
                 }
+                Spacer(Modifier.height(8.dp))
             }
 
-            // ── Tailscale Section Body ────────────────────────────────────────
+            // ── Tailscale body ────────────────────────────────────────────────
             if (isScanning) {
                 item {
-                    Column(
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                            .padding(horizontal = 20.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(SurfaceCard)
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center,
                     ) {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                        Text(
-                            text = "Scanning Tailscale network...",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = NeonBlue,
+                                strokeWidth = 2.dp
+                            )
+                            Text(
+                                "Scanning Tailscale network…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.White.copy(alpha = 0.6f),
+                            )
+                        }
                     }
                 }
             } else if (!scanError.isNullOrBlank()) {
                 item {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.errorContainer
-                        )
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(ErrorRed.copy(alpha = 0.1f))
+                            .border(1.dp, ErrorRed.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+                            .padding(16.dp),
                     ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Text(
-                                text = "Scan Failed",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.onErrorContainer
-                            )
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                text = scanError ?: "Unknown error",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onErrorContainer
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            Button(
-                                onClick = { viewModel.startTailscaleScan() },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = MaterialTheme.colorScheme.error
-                                )
-                            ) {
-                                Text("Retry")
-                            }
-                        }
+                        Text(
+                            "Scan Failed",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = ErrorRed,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = scanError ?: "Unknown error",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.White.copy(alpha = 0.6f),
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        Button(
+                            onClick = { viewModel.startTailscaleScan() },
+                            colors = ButtonDefaults.buttonColors(containerColor = ErrorRed),
+                            shape = RoundedCornerShape(8.dp),
+                        ) { Text("Retry", fontSize = 13.sp) }
                     }
                 }
             } else if (discoveredDevices.isEmpty()) {
                 item {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                        )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(SurfaceCard)
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center,
                     ) {
-                        Column(
-                            modifier = Modifier.padding(16.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                Icons.Default.WifiOff,
+                                contentDescription = null,
+                                tint = Color.White.copy(alpha = 0.15f),
+                                modifier = Modifier.size(36.dp),
+                            )
+                            Spacer(Modifier.height(8.dp))
                             Text(
-                                text = "No Active Devices Found",
-                                style = MaterialTheme.typography.titleMedium
+                                "No Active Devices Found",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color.White.copy(alpha = 0.4f),
+                                fontWeight = FontWeight.Medium,
                             )
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                text = "Make sure both devices are connected to Tailscale, have this app open, and are using the same room.",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                "Ensure both devices are on Tailscale and using the same room",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.White.copy(alpha = 0.25f),
+                                textAlign = TextAlign.Center,
                             )
                         }
                     }
                 }
             } else {
                 items(discoveredDevices, key = { it.ip }) { device ->
-                    TailscaleDiscoveredDeviceRow(
-                        device = device,
-                        onDial = { onDialPeer(device.ip) },
-                        onSave = { viewModel.saveDiscoveredDevice(device) }
+                    TailscaleDeviceCard(
+                        device  = device,
+                        onDial  = { onDialPeer(device.ip) },
+                        onText  = { onTextPeer(device.ip, device.name) },
+                        onSave  = { viewModel.saveDiscoveredDevice(device) },
                     )
                 }
             }
 
-            // ── Peers Header ──────────────────────────────────────────────────
+            // ── Saved peers header ────────────────────────────────────────────
             item {
-                Spacer(Modifier.height(16.dp))
-                Text(
-                    text  = "Saved Peers",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(20.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    SectionLabel("Saved Contacts")
+                    if (peers.isNotEmpty()) {
+                        Text(
+                            "${peers.size} contact${if (peers.size != 1) "s" else ""}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.4f),
+                        )
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
             }
 
-            // ── Peers Body ────────────────────────────────────────────────────
+            // ── Saved peers body ──────────────────────────────────────────────
             if (peers.isEmpty()) {
                 item {
-                    Text(
-                        "No peers yet. Tap + to add one manually.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(SurfaceCard)
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                Icons.Default.PersonAdd,
+                                contentDescription = null,
+                                tint = NeonBlue.copy(alpha = 0.3f),
+                                modifier = Modifier.size(36.dp),
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                "No saved contacts",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color.White.copy(alpha = 0.4f),
+                                fontWeight = FontWeight.Medium,
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "Tap + to add an IP contact manually",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.White.copy(alpha = 0.25f),
+                            )
+                        }
+                    }
                 }
             } else {
                 items(peers, key = { it.id }) { peer ->
-                    PeerRow(
+                    PeerCard(
                         peer     = peer,
                         onDial   = { onDialPeer(peer.address) },
+                        onText   = { onTextPeer(peer.address, peer.label) },
                         onDelete = { viewModel.deletePeer(peer) },
                     )
                 }
             }
-            
+
+            // ── Call History section ───────────────────────────────────────────
             item {
-                Spacer(Modifier.height(80.dp)) // Avoid content covered by FAB
+                Spacer(Modifier.height(20.dp))
+                Column(modifier = Modifier.padding(horizontal = 20.dp)) {
+                    CallHistorySection(onCallPeer = { address -> onDialPeer(address) })
+                }
             }
+
+            item { Spacer(Modifier.height(100.dp)) }
         }
+
+        // ── Extended FAB ──────────────────────────────────────────────────────
+        ExtendedFloatingActionButton(
+            onClick = { showAddDialog = true },
+            expanded = fabExpanded,
+            icon = {
+                Icon(Icons.Default.Add, contentDescription = "Add contact")
+            },
+            text = { Text("Add Contact") },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(20.dp)
+                .navigationBarsPadding(),
+            containerColor = NeonBlue,
+            contentColor   = Color.White,
+        )
     }
 
-    // ── Add peer dialog ───────────────────────────────────────────────────────
+    // ── Dialogs ───────────────────────────────────────────────────────────────
+
     if (showAddDialog) {
         AddPeerDialog(
             onDismiss = { showAddDialog = false },
@@ -374,7 +543,6 @@ fun ContactsScreen(
         )
     }
 
-    // ── Room Config dialog ──────────────────────────────────────────────────
     if (showRoomDialog) {
         RoomConfigDialog(
             currentRoom = customRoomName,
@@ -387,93 +555,222 @@ fun ContactsScreen(
     }
 }
 
+// ── Section label ─────────────────────────────────────────────────────────────
+
 @Composable
-private fun TailscaleDiscoveredDeviceRow(
+private fun SectionLabel(text: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .width(3.dp)
+                .height(16.dp)
+                .background(GradientPrimary, RoundedCornerShape(2.dp))
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = text,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            color = Color.White,
+        )
+    }
+}
+
+// ── Tailscale discovered device card ─────────────────────────────────────────
+
+@Composable
+private fun TailscaleDeviceCard(
     device: DiscoveredDevice,
     onDial: () -> Unit,
+    onText: () -> Unit,
     onSave: () -> Unit,
 ) {
     var isSaved by remember { mutableStateOf(false) }
 
-    Surface(
-        shape    = RoundedCornerShape(10.dp),
-        tonalElevation = 2.dp,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(
-            modifier = Modifier.padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    text = device.name,
-                    style = MaterialTheme.typography.bodyLarge
-                )
-                Text(
-                    text = device.ip,
-                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            IconButton(onClick = onDial) {
-                Icon(Icons.Default.Call, contentDescription = "Call", tint = MaterialTheme.colorScheme.primary)
-            }
+    ContactCard(
+        label           = device.name,
+        address         = device.ip,
+        isVerified      = false,
+        onDial          = onDial,
+        onText          = onText,
+        trailingContent = {
             IconButton(
-                onClick = {
-                    onSave()
-                    isSaved = true
-                },
-                enabled = !isSaved
+                onClick  = { onSave(); isSaved = true },
+                enabled  = !isSaved,
+                modifier = Modifier.size(36.dp),
+            ) {
+                AnimatedContent(
+                    targetState = isSaved,
+                    transitionSpec = { scaleIn() togetherWith scaleOut() }
+                ) { saved ->
+                    Icon(
+                        imageVector        = if (saved) Icons.Default.Check else Icons.Default.BookmarkAdd,
+                        contentDescription = if (saved) "Saved" else "Save contact",
+                        tint               = if (saved) AccentGreen else NeonBlue,
+                        modifier           = Modifier.size(18.dp),
+                    )
+                }
+            }
+        }
+    )
+}
+
+// ── Saved peer card ───────────────────────────────────────────────────────────
+
+@Composable
+private fun PeerCard(
+    peer: PeerEntity,
+    onDial: () -> Unit,
+    onText: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    ContactCard(
+        label           = peer.label,
+        address         = peer.address,
+        isVerified      = peer.publicKeyBase64 != null,
+        onDial          = onDial,
+        onText          = onText,
+        trailingContent = {
+            IconButton(
+                onClick  = onDelete,
+                modifier = Modifier.size(36.dp),
             ) {
                 Icon(
-                    imageVector = if (isSaved) Icons.Default.Check else Icons.Default.Save,
-                    contentDescription = "Save contact",
-                    tint = if (isSaved) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
+                    Icons.Default.Delete,
+                    contentDescription = "Delete",
+                    tint    = ErrorRed.copy(alpha = 0.7f),
+                    modifier = Modifier.size(18.dp),
                 )
             }
+        }
+    )
+}
+
+// ── Shared contact card ───────────────────────────────────────────────────────
+
+@Composable
+private fun ContactCard(
+    label: String,
+    address: String,
+    isVerified: Boolean,
+    onDial: () -> Unit,
+    onText: () -> Unit,
+    trailingContent: @Composable () -> Unit,
+) {
+    Card(
+        modifier  = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 4.dp),
+        shape     = RoundedCornerShape(14.dp),
+        colors    = CardDefaults.cardColors(containerColor = SurfaceCard),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        border    = androidx.compose.foundation.BorderStroke(
+            width = 1.dp,
+            color = Color.White.copy(alpha = 0.06f),
+        ),
+    ) {
+        Row(
+            modifier          = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // Avatar circle
+            Box(
+                modifier = Modifier
+                    .size(42.dp)
+                    .background(
+                        Brush.radialGradient(
+                            listOf(NeonBlue.copy(alpha = 0.3f), NeonPurple.copy(alpha = 0.15f))
+                        ),
+                        CircleShape,
+                    )
+                    .border(1.dp, NeonBlue.copy(alpha = 0.25f), CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text  = if (label.isNotBlank()) label.first().uppercaseChar().toString() else "?",
+                    color = NeonBlue,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 17.sp,
+                )
+            }
+
+            Spacer(Modifier.width(12.dp))
+
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text  = label,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = Color.White,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    text  = address,
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    color = Color.White.copy(alpha = 0.45f),
+                    fontSize = 11.sp,
+                )
+                if (isVerified) {
+                    Spacer(Modifier.height(2.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.VerifiedUser,
+                            contentDescription = "Verified",
+                            tint = AccentGreen,
+                            modifier = Modifier.size(10.dp),
+                        )
+                        Spacer(Modifier.width(3.dp))
+                        Text(
+                            "Verified",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AccentGreen,
+                            fontSize = 10.sp,
+                        )
+                    }
+                }
+            }
+
+            // ── Action buttons: Call + Text ───────────────────────────────────
+
+            // Text / message
+            IconButton(
+                onClick  = onText,
+                modifier = Modifier
+                    .size(36.dp)
+                    .background(NeonPurple.copy(alpha = 0.1f), CircleShape),
+            ) {
+                Icon(
+                    Icons.Default.Message,
+                    contentDescription = "Text",
+                    tint = NeonPurple,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+
+            Spacer(Modifier.width(6.dp))
+
+            // Call
+            IconButton(
+                onClick  = onDial,
+                modifier = Modifier
+                    .size(36.dp)
+                    .background(NeonBlue.copy(alpha = 0.15f), CircleShape),
+            ) {
+                Icon(
+                    Icons.Default.Call,
+                    contentDescription = "Call",
+                    tint = NeonBlue,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+
+            Spacer(Modifier.width(4.dp))
+
+            trailingContent()
         }
     }
 }
 
-@Composable
-private fun PeerRow(
-    peer: com.p2p.core.storage.PeerEntity,
-    onDial: () -> Unit,
-    onDelete: () -> Unit,
-) {
-    Surface(
-        shape    = RoundedCornerShape(10.dp),
-        tonalElevation = 2.dp,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(
-            modifier = Modifier.padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(peer.label, style = MaterialTheme.typography.bodyLarge)
-                Text(
-                    peer.address,
-                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                if (peer.publicKeyBase64 != null) {
-                    Text(
-                        "✓ Verified",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                }
-            }
-            IconButton(onClick = onDial) {
-                Icon(Icons.Default.Call, contentDescription = "Call", tint = MaterialTheme.colorScheme.primary)
-            }
-            IconButton(onClick = onDelete) {
-                Icon(Icons.Default.Delete, contentDescription = "Delete", tint = MaterialTheme.colorScheme.error)
-            }
-        }
-    }
-}
+// ── Add peer dialog ───────────────────────────────────────────────────────────
 
 @Composable
 private fun AddPeerDialog(
@@ -485,37 +782,53 @@ private fun AddPeerDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title   = { Text("Add peer manually") },
-        text    = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        containerColor   = Color(0xFF1A1A26),
+        title   = {
+            Text(
+                "Add Contact",
+                color = Color.White,
+                fontWeight = FontWeight.SemiBold,
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(
                     value         = label,
                     onValueChange = { label = it },
-                    label         = { Text("Label (e.g. Alice)") },
+                    label         = { Text("Display Name") },
+                    placeholder   = { Text("e.g. Alice") },
                     singleLine    = true,
                     modifier      = Modifier.fillMaxWidth(),
+                    colors        = dialogTextFieldColors(),
                 )
                 OutlinedTextField(
                     value         = address,
                     onValueChange = { address = it },
-                    label         = { Text("IP or Tailscale hostname") },
-                    placeholder   = { Text("100.64.x.x or alice.tail-…ts.net") },
+                    label         = { Text("IP / Tailscale Hostname") },
+                    placeholder   = { Text("100.64.x.x or alice.tail…") },
                     singleLine    = true,
                     modifier      = Modifier.fillMaxWidth(),
+                    colors        = dialogTextFieldColors(),
                 )
             }
         },
         confirmButton = {
-            TextButton(
-                onClick = { onConfirm(label, address) },
-                enabled = label.isNotBlank() && address.isNotBlank(),
-            ) { Text("Add") }
+            Button(
+                onClick  = { onConfirm(label, address) },
+                enabled  = label.isNotBlank() && address.isNotBlank(),
+                colors   = ButtonDefaults.buttonColors(containerColor = NeonBlue),
+                shape    = RoundedCornerShape(8.dp),
+            ) { Text("Add", color = Color.White) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = Color.White.copy(alpha = 0.5f))
+            }
         },
     )
 }
+
+// ── Room config dialog ────────────────────────────────────────────────────────
 
 @Composable
 private fun RoomConfigDialog(
@@ -527,37 +840,56 @@ private fun RoomConfigDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Configure Room Name") },
+        containerColor   = Color(0xFF1A1A26),
+        title = {
+            Text(
+                "Configure Room",
+                color = Color.White,
+                fontWeight = FontWeight.SemiBold,
+            )
+        },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    text = "If automatic pairing fails or devices are on different subnets, enter a shared room name (e.g. 'home') on both devices to pair them securely over the VPN.",
+                    text  = "Enter a shared room name on both devices to pair over Tailscale when auto-detection fails.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = Color.White.copy(alpha = 0.55f),
                 )
                 OutlinedTextField(
-                    value = room,
+                    value         = room,
                     onValueChange = { room = it },
-                    label = { Text("Room Name / Pairing Code") },
-                    placeholder = { Text("e.g. family") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    label         = { Text("Room Name / Pairing Code") },
+                    placeholder   = { Text("e.g. family") },
+                    singleLine    = true,
+                    modifier      = Modifier.fillMaxWidth(),
+                    colors        = dialogTextFieldColors(),
                 )
             }
         },
         confirmButton = {
-            TextButton(
-                onClick = {
-                    onConfirm(room.trim().ifEmpty { null })
-                }
-            ) { Text("Save") }
+            Button(
+                onClick = { onConfirm(room.trim().ifEmpty { null }) },
+                colors  = ButtonDefaults.buttonColors(containerColor = NeonBlue),
+                shape   = RoundedCornerShape(8.dp),
+            ) { Text("Save", color = Color.White) }
         },
         dismissButton = {
-            TextButton(
-                onClick = {
-                    onConfirm(null)
-                }
-            ) { Text("Use Auto") }
+            TextButton(onClick = { onConfirm(null) }) {
+                Text("Use Auto", color = Color.White.copy(alpha = 0.5f))
+            }
         }
     )
 }
+
+// ── Dialog text field colours helper ─────────────────────────────────────────
+
+@Composable
+private fun dialogTextFieldColors() = OutlinedTextFieldDefaults.colors(
+    focusedTextColor    = Color.White,
+    unfocusedTextColor  = Color.White,
+    focusedBorderColor  = NeonBlue,
+    unfocusedBorderColor = Color.White.copy(alpha = 0.2f),
+    cursorColor         = NeonBlue,
+    focusedLabelColor   = NeonBlue,
+    unfocusedLabelColor = Color.White.copy(alpha = 0.4f),
+)

@@ -57,6 +57,14 @@ sealed class SignalingMessage {
         val text: String,
         val senderLabel: String = ""
     ) : SignalingMessage()
+
+    /** Standalone peer-to-peer text session message (no active call required). */
+    @Serializable
+    @SerialName("text_session")
+    data class TextSessionMessage(
+        val text: String,
+        val senderLabel: String = ""
+    ) : SignalingMessage()
 }
 
 sealed interface SignalingEvent {
@@ -69,4 +77,5 @@ sealed interface SignalingEvent {
     data class IncomingRenegotiateOffer(val message: SignalingMessage.RenegotiateOffer) : SignalingEvent
     data class IncomingRenegotiateAnswer(val message: SignalingMessage.RenegotiateAnswer) : SignalingEvent
     data class IncomingTextMessage(val message: SignalingMessage.TextMessage) : SignalingEvent
+    data class IncomingTextSessionMessage(val message: SignalingMessage.TextSessionMessage) : SignalingEvent
 }

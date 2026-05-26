@@ -30,6 +30,7 @@ android {
 dependencies {
     implementation(project(":core-network"))
     implementation(project(":core-storage"))
+    implementation(project(":feature-call"))
 
     implementation(libs.hilt.android)
     kapt(libs.hilt.compiler)
